@@ -1,0 +1,154 @@
+<!doctype html><html lang="nl"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><meta name="theme-color" content="#ffffff">
+<link rel="manifest" href="manifest.json"><link rel="icon" href="icon.svg"><title>Frans leren</title>
+<style>
+/* E-ink: alleen zwart/wit/grijs, dikke randen, geen animaties of overgangen */
+*{box-sizing:border-box;margin:0;-webkit-tap-highlight-color:transparent}
+html,body{background:#fff;color:#000;font:20px/1.4 Georgia,'Times New Roman',serif}
+body{max-width:640px;margin:0 auto;padding:0 14px 96px}
+header{padding:12px 0 10px;border-bottom:3px solid #000}
+.cnt{font-size:26px;font-weight:700;display:flex;justify-content:space-between}
+.bar{height:14px;border:2px solid #000;margin-top:8px}.bar i{display:block;height:100%;background:#000}
+nav{position:fixed;bottom:0;left:0;right:0;max-width:640px;margin:0 auto;display:flex;background:#fff;border-top:3px solid #000}
+nav button{flex:1;border:0;border-right:2px solid #000;background:#fff;font:inherit;font-size:17px;padding:16px 2px;color:#000}
+nav button:last-child{border-right:0}nav button.on{background:#000;color:#fff;font-weight:700}
+button,select,input,textarea{font:inherit;color:#000}
+.btn{display:block;width:100%;min-height:62px;border:3px solid #000;background:#fff;padding:10px 14px;margin:12px 0;text-align:left;font-weight:700}
+.btn.c{text-align:center}.btn:active{background:#000;color:#fff}
+.card{padding:22px 0 6px}.dir{font-size:16px;color:#333}.new{border:2px solid #000;padding:0 8px;margin-left:8px;font-weight:700}
+.q{font-size:42px;font-weight:700;margin:14px 0 18px;word-break:break-word;line-height:1.15}
+.opt{font-weight:400;font-size:24px}
+.opt.good{border-width:6px;font-weight:700}.opt.bad{border-style:dashed;text-decoration:line-through}
+.ex{border-left:5px solid #000;padding-left:12px;margin:14px 0;font-size:18px}
+.c{text-align:center}p{margin:10px 0}h2{margin:18px 0 8px;font-size:22px}
+table{width:100%;border-collapse:collapse}td,th{border:2px solid #000;padding:8px;text-align:left}
+input,textarea,select{width:100%;border:3px solid #000;padding:10px;margin:4px 0 10px;background:#fff;border-radius:0}
+label{font-size:17px}.row{display:flex;gap:10px}.row>*{flex:1}.w{padding:10px 0;border-bottom:2px solid #000;display:flex;justify-content:space-between;gap:10px}
+.chk{display:flex;align-items:center;gap:12px;margin:12px 0}.chk input{width:30px;height:30px;margin:0}
+small{color:#333;font-size:16px}
+</style></head><body><header id="hd"></header><main id="app"></main><nav id="nav"></nav>
+<script src="scheduler.js"></script><script src="words.js"></script>
+<script>
+/* ===== 1. DATABASE (IndexedDB: woorden | voortgang | instellingen) ===== */
+const DB={db:null,
+ open(){return new Promise((ok,no)=>{const r=indexedDB.open('frans',1);r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore('words',{keyPath:'id',autoIncrement:true});d.createObjectStore('prog',{keyPath:'key'});d.createObjectStore('meta',{keyPath:'k'})};r.onsuccess=()=>{this.db=r.result;ok()};r.onerror=()=>no(r.error)})},
+ all(s){return new Promise(ok=>{const q=this.db.transaction(s).objectStore(s).getAll();q.onsuccess=()=>ok(q.result)})},
+ batch(ops){return new Promise((ok,no)=>{const t=this.db.transaction([...new Set(ops.map(o=>o[0]))],'readwrite');let id;ops.forEach(([s,k,v])=>{const o=t.objectStore(s);if(k==='put'){const r=o.put(v);r.onsuccess=()=>id=r.result}else if(k==='add')o.add(v);else if(k==='del')o.delete(v);else o.clear()});t.oncomplete=()=>ok(id);t.onerror=()=>no(t.error)})}};
+
+/* ===== 2. STATE ===== */
+const GOAL=10000;
+let words=[],prog=new Map(),meta={counter:0,dirs:'both',onlyReview:false,autoplay:true,hideFr:false,celebrated:0,listUrl:''},view='practice',cur=null,edit=null,query='',msg='';
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const dirs=()=>meta.dirs==='both'?['fn','nf']:[meta.dirs];
+const P=(id,d)=>prog.get(id+'|'+d);
+const mastered=w=>['fn','nf'].every(d=>P(w.id,d)?.mastered);
+const saveMeta=()=>DB.batch([['meta','put',{k:'m',...meta}]]);
+
+/* ===== 3. WACHTRIJ: kiest welk item nu aan de beurt is ===== */
+function pick(){
+ const ds=dirs();
+ for(const skip of [true,false]){
+  const ok=w=>!(skip&&cur&&w.id===cur.w.id);
+  let best=null;
+  for(const w of words){if(!ok(w))continue;for(const d of ds){const p=P(w.id,d);if(p&&!p.mastered&&p.due<=meta.counter&&(!best||p.due<best.p.due))best={w,d,p}}}
+  if(best)return best;                                   // 1. langst wachtende
+  if(meta.onlyReview)continue;
+  for(const w of words){if(!ok(w))continue;const un=ds.filter(d=>!P(w.id,d));if(un.length)return{w,d:un[Math.random()*un.length|0],p:Scheduler.fresh(),isNew:true}} // 2. nieuw woord
+  for(const w of words){if(!ok(w))continue;for(const d of ds){const p=P(w.id,d);if(p&&!p.mastered&&(!best||p.due<best.p.due))best={w,d,p}}}
+  if(best)return best;                                   // 3. dichtstbijzijnde, zodat oefenen nooit stopt
+ }
+ return null}
+function opts(w,d){const f=d==='fn'?'nl':'fr',a=w[f],s=[a];let t=0;
+ while(s.length<4&&t++<300){const o=words[Math.random()*words.length|0][f];if(!s.some(x=>x.toLowerCase()===o.toLowerCase()))s.push(o)}
+ for(let i=s.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[s[i],s[j]]=[s[j],s[i]]}return s}
+function next(){cur=words.length<4?null:pick();if(cur){cur.ans=cur.w[cur.d==='fn'?'nl':'fr'];cur.opts=opts(cur.w,cur.d);if(cur.d==='fn'&&meta.autoplay)say(cur.w.fr)}render()}
+async function answer(i){
+ if(cur.done)return;cur.done=true;cur.chosen=i;cur.ok=cur.opts[i]===cur.ans;
+ meta.counter++;const p=cur.p;if(!p.key){p.key=cur.w.id+'|'+cur.d;p.id=cur.w.id;p.dir=cur.d}
+ Scheduler.grade(p,cur.ok,meta.counter);prog.set(p.key,p);
+ const win=words.length&&words.every(mastered)&&meta.celebrated!==words.length;if(win)meta.celebrated=words.length;
+ await DB.batch([['prog','put',p],['meta','put',{k:'m',...meta}]]);fileBackup();
+ if(cur.d==='nf'&&meta.autoplay)say(cur.w.fr);
+ render();if(win)confetti()}
+function say(t){try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang='fr-FR';u.rate=.9;speechSynthesis.speak(u)}catch(e){}}
+function confetti(){const c=document.createElement('canvas');c.style.cssText='position:fixed;inset:0;z-index:9;pointer-events:none';c.width=innerWidth;c.height=innerHeight;document.body.appendChild(c);
+ const x=c.getContext('2d'),ps=Array.from({length:300},()=>({x:Math.random()*c.width,y:-Math.random()*c.height,s:7+Math.random()*12,v:3+Math.random()*6,g:Math.random()*4|0}));let f=0;
+ (function t(){x.clearRect(0,0,c.width,c.height);ps.forEach(p=>{p.y+=p.v;p.x+=Math.sin(p.y/30)*2;x.fillStyle=['#000','#555','#999','#ccc'][p.g];x.fillRect(p.x,p.y,p.s,p.s*.6)});if(++f<280)requestAnimationFrame(t);else c.remove()})()}
+
+/* ===== 4. SCHERMEN ===== */
+const V={
+practice(){
+ if(words.length<4)return`<p class=c>Voeg minstens 4 woorden toe (tab Woorden).</p>`;
+ if(!cur)return`<p class=c>${meta.onlyReview?'Niets aan de beurt. Zet "Alleen herhalen" uit bij Instellingen.':'Alles beheerst! 🎉'}</p>`;
+ const{w,d,done}=cur,fn=d==='fn',gi=cur.opts.indexOf(cur.ans);
+ const q=fn?(meta.hideFr&&!done?`<button class="btn c" onclick="say(cur.w.fr)">🔊 Luister</button>`:`<div class=q>${esc(w.fr)}</div>`):`<div class=q>${esc(w.nl)}</div>`;
+ return`<div class=card><div class=dir>${fn?'Frans → Nederlands':'Nederlands → Frans'}${cur.isNew?'<span class=new>nieuw</span>':''}</div>${q}
+ ${fn&&!done&&!meta.hideFr?`<button class="btn c" onclick="say(cur.w.fr)">🔊</button>`:''}
+ ${cur.opts.map((o,i)=>`<button class="btn opt ${done?(i===gi?'good':i===cur.chosen?'bad':''):''}" onclick="answer(${i})">${done?(i===gi?'✓ ':i===cur.chosen?'✗ ':''):''}${esc(o)}</button>`).join('')}
+ ${done?`${w.ex?`<div class=ex>${esc(w.ex)}<br><small>${esc(w.exNl)}</small></div>`:''}<button class="btn c" onclick="say(cur.w.fr)">🔊 ${esc(w.fr)}</button><button class="btn c" onclick="next()">Volgende</button>`:''}</div>`},
+stats(){
+ let nw=0,lr=0,ms=0;words.forEach(w=>{const a=['fn','nf'].map(d=>P(w.id,d));if(mastered(w))ms++;else if(a.some(Boolean))lr++;else nw++});
+ const row=(n,d)=>{let s=0,m=0,r=0,x=0;words.forEach(w=>{const p=P(w.id,d);if(p){s++;if(p.mastered)m++;r+=p.right;x+=p.wrong}});return`<tr><td>${n}</td><td>${s}</td><td>${m}</td><td>${r}</td><td>${x}</td></tr>`};
+ let R=0,X=0;prog.forEach(p=>{R+=p.right;X+=p.wrong});
+ return`<h2>Woordenschat</h2><table><tr><td>In bibliotheek</td><td>${words.length}</td></tr><tr><td>Nieuw</td><td>${nw}</td></tr><tr><td>In leerproces</td><td>${lr}</td></tr><tr><td>Beheerst (beide kanten)</td><td>${ms}</td></tr><tr><td>Goed / fout</td><td>${R} / ${X}</td></tr><tr><td>Beantwoord</td><td>${meta.counter}</td></tr></table>
+ <h2>Per richting</h2><table><tr><th></th><th>Gezien</th><th>Beheerst</th><th>Goed</th><th>Fout</th></tr>${row('FR→NL','fn')}${row('NL→FR','nf')}</table>`},
+words(){
+ if(edit){const w=edit==='new'?{}:words.find(x=>x.id===edit);return`<h2>${edit==='new'?'Nieuw woord':'Woord wijzigen'}</h2>
+ <label>Frans</label><input id=f_fr value="${esc(w.fr)}"><label>Nederlands</label><input id=f_nl value="${esc(w.nl)}">
+ <label>Voorbeeldzin (Frans)</label><input id=f_ex value="${esc(w.ex)}"><label>Voorbeeldzin (Nederlands)</label><input id=f_exnl value="${esc(w.exNl)}"><label>Categorie</label><input id=f_cat value="${esc(w.cat)}">
+ <button class="btn c" onclick="saveWord()">Opslaan</button>${edit!=='new'?`<button class="btn c" onclick="resetWord()">Voortgang resetten</button><button class="btn c" onclick="delWord()">Verwijderen</button>`:''}<button class="btn c" onclick="edit=null;render()">Annuleren</button>`}
+ const q=query.toLowerCase(),l=words.filter(w=>!q||(w.fr+' '+w.nl).toLowerCase().includes(q));
+ return`<button class="btn c" onclick="edit='new';render()">+ Woord toevoegen</button><input id=sq placeholder="Zoeken…" value="${esc(query)}" onchange="query=this.value;render()">
+ <small>${l.length} woorden${l.length>40?' (eerste 40 getoond)':''}</small>${l.slice(0,40).map(w=>`<div class=w><span>${esc(w.fr)} — ${esc(w.nl)}${mastered(w)?' ✓':''}</span><button class=btn style="width:auto;min-height:44px;margin:0" onclick="edit=${w.id};render()">Wijzig</button></div>`).join('')}
+ <h2>Importeren</h2><p><small>Eén woord per regel: frans;nederlands;voorbeeldzin;vertaling;categorie (scheiden met ; | of tab).</small></p><textarea id=imp rows=5></textarea><button class="btn c" onclick="doImport()">Importeer</button>${msg?`<p>${esc(msg)}</p>`:''}`},
+settings(){const r=(v,t)=>`<label class=chk><input type=radio name=dr ${meta.dirs===v?'checked':''} onchange="meta.dirs='${v}';saveMeta();next()">${t}</label>`,c=(k,t)=>`<label class=chk><input type=checkbox ${meta[k]?'checked':''} onchange="meta.${k}=this.checked;saveMeta();next()">${t}</label>`;
+ return`<h2>Oefenrichting</h2>${r('both','Beide richtingen')}${r('fn','Frans → Nederlands')}${r('nf','Nederlands → Frans')}<h2>Oefenen</h2>${c('onlyReview','Alleen herhalen (geen nieuwe woorden)')}${c('autoplay','Frans automatisch uitspreken')}${c('hideFr','Franse tekst verbergen bij luisteren (FR→NL)')}
+ <h2>Woordenlijsten van GitHub</h2><label>Adres van je woordenlijsten</label><input value="${esc(meta.listUrl)}" placeholder="https://raw.githubusercontent.com/naam/frans-woorden/main/" onchange="meta.listUrl=this.value.trim();saveMeta()"><button class="btn c" onclick="updateWords()">Woorden bijwerken</button>${msg?`<p>${esc(msg)}</p>`:''}<h2>Back-up</h2><p><small>Je voortgang staat in de opslag van deze app op je telefoon. Maak regelmatig een back-up; wissen van app-gegevens verwijdert alles.</small></p><button class="btn c" onclick="backup()">Back-up opslaan</button><input type=file id=rf accept=".json" onchange="restore(this.files[0])">${FS?`<button class="btn c" onclick="fileBackup(true).then(render)">Nu back-up maken in Documents</button><button class="btn c" onclick="fileRestore()">Herstel uit Documents</button><p><small>${esc(bkMsg)}</small></p>`:''}<p id=ps><small></small></p>`}};
+function render(){
+ const m=words.filter(mastered).length;
+ $('#hd').innerHTML=`<div class=cnt><span>🏆 ${m}</span><span>/ ${GOAL}</span></div><div class=bar><i style="width:${Math.min(100,m/GOAL*100)}%"></i></div>`;
+ $('#app').innerHTML=V[view]();
+ $('#nav').innerHTML=[['practice','Oefenen'],['stats','Voortgang'],['words','Woorden'],['settings','Opties']].map(([k,t])=>`<button class="${view===k?'on':''}" onclick="go('${k}')">${t}</button>`).join('');
+ if(view==='settings')navigator.storage?.persisted?.().then(p=>{const e=$('#ps');if(e)e.textContent=p?'Opslag: beschermd tegen automatisch wissen.':'Opslag: nog niet beschermd (installeer de app via "Toevoegen aan startscherm").'})}
+function go(v){view=v;edit=null;msg='';render()}
+
+/* ===== 5. WOORDEN BEHEREN + BACK-UP ===== */
+async function reload(){words=await DB.all('words')}
+async function saveWord(){const g=i=>$('#'+i).value.trim(),w={fr:g('f_fr'),nl:g('f_nl'),ex:g('f_ex'),exNl:g('f_exnl'),cat:g('f_cat')};
+ if(!w.fr||!w.nl)return alert('Vul Frans en Nederlands in.');if(edit!=='new')w.id=edit;
+ await DB.batch([['words','put',w]]);await reload();edit=null;if(!cur||cur.done)next();else render()}
+async function delWord(){if(!confirm('Woord verwijderen?'))return;const id=edit;['fn','nf'].forEach(d=>prog.delete(id+'|'+d));
+ await DB.batch([['words','del',id],['prog','del',id+'|fn'],['prog','del',id+'|nf']]);await reload();edit=null;cur=null;next()}
+async function resetWord(){const id=edit;['fn','nf'].forEach(d=>prog.delete(id+'|'+d));await DB.batch([['prog','del',id+'|fn'],['prog','del',id+'|nf']]);edit=null;cur=null;next()}
+async function importText(t){const have=new Set(words.map(w=>w.fr+'|'+w.nl)),ops=[];
+ t.split(/\r?\n/).forEach(l=>{const c=l.split(/[;\t|]/).map(x=>x.trim());if(c.length<2||!c[0]||!c[1]||c[0][0]==='#'||c[0].toLowerCase()==='frans'||have.has(c[0]+'|'+c[1]))return;have.add(c[0]+'|'+c[1]);ops.push(['words','add',{fr:c[0],nl:c[1],ex:c[2]||'',exNl:c[3]||'',cat:c[4]||''}])});
+ if(ops.length)await DB.batch(ops);await reload();return ops.length}
+async function doImport(){const n=await importText($('#imp').value);msg=n+' woorden toegevoegd.';render()}
+async function updateWords(){const b=(meta.listUrl||'').trim();if(!b){msg='Vul eerst het adres van je woordenlijsten in.';return render()}
+ const base=b.endsWith('/')?b:b+'/';msg='Bezig met ophalen…';render();
+ try{const r0=await fetch(base+'index.json',{cache:'no-store'});if(!r0.ok)throw new Error('index.json: '+r0.status);const idx=await r0.json();let n=0;
+  for(const f of idx.lijsten){const r=await fetch(base+f,{cache:'no-store'});if(!r.ok)throw new Error(f+': '+r.status);n+=await importText(await r.text())}
+  msg=n+' nieuwe woorden toegevoegd ('+words.length+' in totaal).'}catch(e){msg='Bijwerken mislukt: '+(e.message||e)}
+ if(!cur||cur.done)next();else render()}
+const FS=window.Capacitor?.isNativePlatform?.()?Capacitor.Plugins.Filesystem:null,FP={path:'FransLeren/backup.json',directory:'DOCUMENTS'};
+let sinceBk=0,bkMsg=FS?'Nog geen automatische back-up gemaakt.':'';
+const snapshot=()=>({words,prog:[...prog.values()],meta});
+async function fileBackup(force){if(!FS||(!force&&++sinceBk<20))return;sinceBk=0;
+ try{await FS.writeFile({...FP,data:JSON.stringify(snapshot()),encoding:'utf8',recursive:true});bkMsg='Laatste back-up in Documents/FransLeren: '+new Date().toLocaleTimeString('nl-NL')}catch(e){bkMsg='Back-up in telefoonbestand mislukt: '+(e.message||e)}}
+async function fileRestore(){try{const r=await FS.readFile({...FP,encoding:'utf8'});if(confirm('Alles vervangen door de back-up uit Documents/FransLeren?'))await applySnapshot(JSON.parse(r.data))}catch(e){alert('Geen back-upbestand gevonden.')}}
+async function applySnapshot(d){await DB.batch([['words','clear'],['prog','clear'],['meta','clear'],...d.words.map(w=>['words','put',w]),...d.prog.map(p=>['prog','put',p]),['meta','put',{k:'m',...d.meta}]]);location.reload()}
+document.addEventListener('visibilitychange',()=>{if(document.hidden)fileBackup(true)});
+function backup(){const b=new Blob([JSON.stringify(snapshot())],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='frans-backup-'+new Date().toISOString().slice(0,10)+'.json';a.click()}
+async function restore(f){if(!f||!confirm('Alles vervangen door deze back-up?'))return;await applySnapshot(JSON.parse(await f.text()))}
+
+/* ===== 6. START ===== */
+(async()=>{
+ try{navigator.storage?.persist?.()}catch(e){}
+ await DB.open();await reload();(await DB.all('prog')).forEach(p=>prog.set(p.key,p));
+ const m=(await DB.all('meta')).find(x=>x.k==='m');if(m)Object.assign(meta,m);
+ if(!words.length&&!m&&FS){try{const r=await FS.readFile({...FP,encoding:'utf8'});await applySnapshot(JSON.parse(r.data));return}catch(e){}}
+ if(!words.length&&!m){await DB.batch(SEED.split('\n').map(l=>{const[a,b]=l.split('|');return['words','add',{fr:a,nl:b,ex:'',exNl:'',cat:''}]}));await reload();await saveMeta()}
+ if(!FS&&'serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
+ next()})();
+</script></body></html>
