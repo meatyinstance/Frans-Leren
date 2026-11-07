@@ -37,7 +37,7 @@ const DB={db:null,
 
 /* ===== 2. STATE ===== */
 const GOAL=10000;
-let words=[],prog=new Map(),meta={counter:0,dirs:'both',onlyReview:false,autoplay:true,hideFr:false,celebrated:0,listUrl:''},view='practice',cur=null,edit=null,query='',msg='';
+let words=[],prog=new Map(),meta={counter:0,dirs:'both',onlyReview:false,autoplay:true,hideFr:false,celebrated:0,listUrl:'',sounds:true},view='practice',cur=null,edit=null,query='',msg='';
 const $=s=>document.querySelector(s);
 const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 const dirs=()=>meta.dirs==='both'?['fn','nf']:[meta.dirs];
@@ -60,17 +60,20 @@ function pick(){
  }
  return null}
 function opts(w,d){const f=d==='fn'?'nl':'fr',a=w[f],s=[a];let t=0;
- while(s.length<4&&t++<300){const o=words[Math.random()*words.length|0][f];if(!s.some(x=>x.toLowerCase()===o.toLowerCase()))s.push(o)}
+ while(s.length<4&&t++<300){const cw=words[Math.random()*words.length|0],o=cw[f];if(d==='nf'&&cw.nl.toLowerCase()===w.nl.toLowerCase())continue;if(!s.some(x=>x.toLowerCase()===o.toLowerCase()))s.push(o)}
  for(let i=s.length-1;i>0;i--){const j=Math.random()*(i+1)|0;[s[i],s[j]]=[s[j],s[i]]}return s}
 function next(){cur=words.length<4?null:pick();if(cur){cur.ans=cur.w[cur.d==='fn'?'nl':'fr'];cur.opts=opts(cur.w,cur.d);if(cur.d==='fn'&&meta.autoplay)say(cur.w.fr)}render()}
 async function answer(i){
- if(cur.done)return;cur.done=true;cur.chosen=i;cur.ok=cur.opts[i]===cur.ans;
+ if(cur.done)return;cur.done=true;cur.chosen=i;cur.ok=cur.opts[i]===cur.ans;beep(cur.ok);
  meta.counter++;const p=cur.p;if(!p.key){p.key=cur.w.id+'|'+cur.d;p.id=cur.w.id;p.dir=cur.d}
  Scheduler.grade(p,cur.ok,meta.counter);prog.set(p.key,p);
  const win=words.length&&words.every(mastered)&&meta.celebrated!==words.length;if(win)meta.celebrated=words.length;
  await DB.batch([['prog','put',p],['meta','put',{k:'m',...meta}]]);fileBackup();
- if(cur.d==='nf'&&meta.autoplay)say(cur.w.fr);
+ if(cur.d==='nf'&&meta.autoplay)setTimeout(()=>say(cur.w.fr),600);
  render();if(win)confetti()}
+let AC;function beep(ok,force){if(!meta.sounds&&!force)return;try{AC=AC||new(window.AudioContext||window.webkitAudioContext)();if(AC.state!=='running')AC.resume();const t=AC.currentTime;
+ (ok?[[660,0],[880,.13]]:[[220,0],[150,.16]]).forEach(([f,d])=>{const o=AC.createOscillator(),g=AC.createGain();o.type=ok?'sine':'square';o.frequency.value=f;
+ g.gain.setValueAtTime(.0001,t+d);g.gain.exponentialRampToValueAtTime(ok?.3:.15,t+d+.02);g.gain.exponentialRampToValueAtTime(.0001,t+d+(ok?.22:.3));o.connect(g);g.connect(AC.destination);o.start(t+d);o.stop(t+d+.35)})}catch(e){}}
 function say(t){try{speechSynthesis.cancel();const u=new SpeechSynthesisUtterance(t);u.lang='fr-FR';u.rate=.9;speechSynthesis.speak(u)}catch(e){}}
 function confetti(){const c=document.createElement('canvas');c.style.cssText='position:fixed;inset:0;z-index:9;pointer-events:none';c.width=innerWidth;c.height=innerHeight;document.body.appendChild(c);
  const x=c.getContext('2d'),ps=Array.from({length:300},()=>({x:Math.random()*c.width,y:-Math.random()*c.height,s:7+Math.random()*12,v:3+Math.random()*6,g:Math.random()*4|0}));let f=0;
@@ -103,7 +106,7 @@ words(){
  <small>${l.length} woorden${l.length>40?' (eerste 40 getoond)':''}</small>${l.slice(0,40).map(w=>`<div class=w><span>${esc(w.fr)} — ${esc(w.nl)}${mastered(w)?' ✓':''}</span><button class=btn style="width:auto;min-height:44px;margin:0" onclick="edit=${w.id};render()">Wijzig</button></div>`).join('')}
  <h2>Importeren</h2><p><small>Eén woord per regel: frans;nederlands;voorbeeldzin;vertaling;categorie (scheiden met ; | of tab).</small></p><textarea id=imp rows=5></textarea><button class="btn c" onclick="doImport()">Importeer</button>${msg?`<p>${esc(msg)}</p>`:''}`},
 settings(){const r=(v,t)=>`<label class=chk><input type=radio name=dr ${meta.dirs===v?'checked':''} onchange="meta.dirs='${v}';saveMeta();next()">${t}</label>`,c=(k,t)=>`<label class=chk><input type=checkbox ${meta[k]?'checked':''} onchange="meta.${k}=this.checked;saveMeta();next()">${t}</label>`;
- return`<h2>Oefenrichting</h2>${r('both','Beide richtingen')}${r('fn','Frans → Nederlands')}${r('nf','Nederlands → Frans')}<h2>Oefenen</h2>${c('onlyReview','Alleen herhalen (geen nieuwe woorden)')}${c('autoplay','Frans automatisch uitspreken')}${c('hideFr','Franse tekst verbergen bij luisteren (FR→NL)')}
+ return`<h2>Oefenrichting</h2>${r('both','Beide richtingen')}${r('fn','Frans → Nederlands')}${r('nf','Nederlands → Frans')}<h2>Oefenen</h2>${c('onlyReview','Alleen herhalen (geen nieuwe woorden)')}${c('sounds','Geluidje bij goed en fout')}<button class="btn c" onclick="beep(true,true)">▶ Test: goed-geluid</button><button class="btn c" onclick="beep(false,true)">▶ Test: fout-geluid</button>${c('autoplay','Frans automatisch uitspreken')}${c('hideFr','Franse tekst verbergen bij luisteren (FR→NL)')}
  <h2>Woordenlijsten van GitHub</h2><label>Adres van je woordenlijsten</label><input value="${esc(meta.listUrl)}" placeholder="https://raw.githubusercontent.com/naam/frans-woorden/main/" onchange="meta.listUrl=this.value.trim();saveMeta()"><button class="btn c" onclick="updateWords()">Woorden bijwerken</button>${msg?`<p>${esc(msg)}</p>`:''}<h2>Back-up</h2><p><small>Je voortgang staat in de opslag van deze app op je telefoon. Maak regelmatig een back-up; wissen van app-gegevens verwijdert alles.</small></p><button class="btn c" onclick="backup()">Back-up opslaan</button><input type=file id=rf accept=".json" onchange="restore(this.files[0])">${FS?`<button class="btn c" onclick="fileBackup(true).then(render)">Nu back-up maken in Documents</button><button class="btn c" onclick="fileRestore()">Herstel uit Documents</button><p><small>${esc(bkMsg)}</small></p>`:''}<p id=ps><small></small></p>`}};
 function render(){
  const m=words.filter(mastered).length;
@@ -121,8 +124,8 @@ async function saveWord(){const g=i=>$('#'+i).value.trim(),w={fr:g('f_fr'),nl:g(
 async function delWord(){if(!confirm('Woord verwijderen?'))return;const id=edit;['fn','nf'].forEach(d=>prog.delete(id+'|'+d));
  await DB.batch([['words','del',id],['prog','del',id+'|fn'],['prog','del',id+'|nf']]);await reload();edit=null;cur=null;next()}
 async function resetWord(){const id=edit;['fn','nf'].forEach(d=>prog.delete(id+'|'+d));await DB.batch([['prog','del',id+'|fn'],['prog','del',id+'|nf']]);edit=null;cur=null;next()}
-async function importText(t){const have=new Set(words.map(w=>w.fr+'|'+w.nl)),ops=[];
- t.split(/\r?\n/).forEach(l=>{const c=l.split(/[;\t|]/).map(x=>x.trim());if(c.length<2||!c[0]||!c[1]||c[0][0]==='#'||c[0].toLowerCase()==='frans'||have.has(c[0]+'|'+c[1]))return;have.add(c[0]+'|'+c[1]);ops.push(['words','add',{fr:c[0],nl:c[1],ex:c[2]||'',exNl:c[3]||'',cat:c[4]||''}])});
+async function importText(t){const have=new Set(words.map(w=>w.fr.toLowerCase())),ops=[];
+ t.split(/\r?\n/).forEach(l=>{const c=l.split(/[;\t|]/).map(x=>x.trim());if(c.length<2||!c[0]||!c[1]||c[0][0]==='#'||c[0].toLowerCase()==='frans'||have.has(c[0].toLowerCase()))return;have.add(c[0].toLowerCase());ops.push(['words','add',{fr:c[0],nl:c[1],ex:c[2]||'',exNl:c[3]||'',cat:c[4]||''}])});
  if(ops.length)await DB.batch(ops);await reload();return ops.length}
 async function doImport(){const n=await importText($('#imp').value);msg=n+' woorden toegevoegd.';render()}
 async function updateWords(){const b=(meta.listUrl||'').trim();if(!b){msg='Vul eerst het adres van je woordenlijsten in.';return render()}
@@ -149,6 +152,6 @@ async function restore(f){if(!f||!confirm('Alles vervangen door deze back-up?'))
  const m=(await DB.all('meta')).find(x=>x.k==='m');if(m)Object.assign(meta,m);
  if(!words.length&&!m&&FS){try{const r=await FS.readFile({...FP,encoding:'utf8'});await applySnapshot(JSON.parse(r.data));return}catch(e){}}
  if(!words.length&&!m){await DB.batch(SEED.split('\n').map(l=>{const[a,b]=l.split('|');return['words','add',{fr:a,nl:b,ex:'',exNl:'',cat:''}]}));await reload();await saveMeta()}
- if(!FS&&'serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
+ if('serviceWorker'in navigator)navigator.serviceWorker.register('sw.js');
  next()})();
 </script></body></html>
