@@ -2,6 +2,7 @@ name: Bouw Android-app
 on:
   push:
     branches: [main]
+    paths-ignore: ['www/**', 'lijst-*.csv', 'index.json']
   workflow_dispatch:
 jobs:
   apk:
@@ -13,6 +14,12 @@ jobs:
       - uses: actions/setup-java@v4
         with: { distribution: temurin, java-version: 21 }
       - run: npm install
+      - name: Stel het adres van de app in
+        run: |
+          OWNER=$(echo "$GITHUB_REPOSITORY_OWNER" | tr 'A-Z' 'a-z')
+          REPO=${GITHUB_REPOSITORY#*/}
+          node -e "const c=require('./capacitor.config.json');c.server={url:'https://$OWNER.github.io/$REPO/'};require('fs').writeFileSync('capacitor.config.json',JSON.stringify(c))"
+          cat capacitor.config.json
       - run: npx cap add android && npx cap sync android
       - run: mkdir -p ~/.android && cp debug.keystore ~/.android/debug.keystore
       - run: cd android && ./gradlew assembleDebug
